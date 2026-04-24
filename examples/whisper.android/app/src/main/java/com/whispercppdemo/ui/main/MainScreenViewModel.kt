@@ -26,11 +26,16 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
     private var recordedFile: File? = null
     private var whisperContext: com.whispercpp.whisper.WhisperContext? = null
 
+    private val prefs: SharedPreferences by lazy {
+        application.getSharedPreferences("whisper_prefs", Context.MODE_PRIVATE)
+    }
+
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             val binder = service as RecordingService.RecordingBinder
             recordingService = binder.getService()
         }
+
         override fun onServiceDisconnected(name: ComponentName?) {
             recordingService = null
         }
@@ -45,10 +50,23 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
 
     private suspend fun loadData() {
         try {
+            // Load saved transcript first
+            loadSavedTranscript()
+
             copyAssets()
             loadBaseModel()
             canTranscribe = true
-        } catch (e: Exception) { Log.e("Whisper", "Load failed", e) }
+        } catch (e: Exception) {
+            Log.e("Whisper", "Load failed", e)
+        }
+    }
+
+    private fun loadSavedTranscript() {
+        dataLog = prefs.getString("data_log", "") ?: ""
+    }
+
+    private fun saveTranscript() {
+        prefs.edit().putString("data_log", dataLog).apply()
     }
 
     private suspend fun copyAssets() = withContext(Dispatchers.IO) {
@@ -63,7 +81,10 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
 
     private suspend fun loadBaseModel() = withContext(Dispatchers.IO) {
         application.assets.list("models/")?.firstOrNull()?.let {
-            whisperContext = com.whispercpp.whisper.WhisperContext.createContextFromAsset(application.assets, "models/$it")
+            whisperContext = com.whispercpp.whisper.WhisperContext.createContextFromAsset(
+                application.assets,
+                "models/$it"
+            )
         }
     }
 
@@ -91,13 +112,20 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
             if (cleanText.isNotEmpty()) {
                 withContext(Dispatchers.Main) {
                     dataLog = if (dataLog.isEmpty()) cleanText else "$dataLog $cleanText"
+                    saveTranscript()  // ← Save after every new transcription
                 }
             }
-        } catch (e: Exception) { Log.e("Whisper", "Transcription error", e) }
-        canTranscribe = true
+        } catch (e: Exception) {
+            Log.e("Whisper", "Transcription error", e)
+        } finally {
+            canTranscribe = true
+        }
     }
 
-    fun clearLog() { dataLog = "" }
+    fun clearLog() {
+        dataLog = ""
+        saveTranscript()  // Clear saved data too
+    }
 
     override fun onCleared() {
         application.unbindService(connection)
@@ -106,7 +134,11 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
 
     companion object {
         fun factory() = viewModelFactory {
-            initializer { MainScreenViewModel(this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY] as Application) }
+            initializer {
+                MainScreenViewModel(
+                    this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY] as Application
+                )
+            }
         }
     }
 }
