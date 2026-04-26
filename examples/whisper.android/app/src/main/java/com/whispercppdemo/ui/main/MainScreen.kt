@@ -55,7 +55,7 @@ private fun MainScreen(
             ) {
                 Box(modifier = Modifier.weight(1f)) {
                     RecordButton(
-                        enabled = canTranscribe, // Keep enabled even during background transcription
+                        enabled = canTranscribe,
                         isRecording = isRecording,
                         onClick = onRecordTapped
                     )
@@ -63,11 +63,11 @@ private fun MainScreen(
 
                 Button(
                     onClick = onTranscribeTapped,
-                    enabled = canTranscribe && isRecording, // Only enabled while actively recording
+                    enabled = canTranscribe && isRecording,
                     modifier = Modifier.weight(1f)
                 ) {
                     Text(
-                        if (queueSize > 0) "Queue: $queueSize..."
+                        if (queueSize > 0) "Queue: $queueSize"
                         else "Transcribe Chunk"
                     )
                 }
@@ -98,6 +98,7 @@ private fun MainScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
+            // The scrollable area
             CumulativeTextDisplay(messageLog)
         }
     }
@@ -107,9 +108,13 @@ private fun MainScreen(
 private fun CumulativeTextDisplay(text: String) {
     val listState = rememberLazyListState()
 
+    // Scroll to the bottom whenever text changes
     LaunchedEffect(text) {
         if (text.isNotEmpty()) {
-            listState.animateScrollToItem(0)
+            // We scroll to index 0 because there is only 1 item in the LazyColumn,
+            // but the text inside that item grows.
+            // However, to be safe with large text chunks, we scroll to the very end.
+            listState.animateScrollToItem(index = 0, scrollOffset = Int.MAX_VALUE)
         }
     }
 
