@@ -2,6 +2,7 @@ package com.whispercppdemo.recorder
 
 import android.app.*
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
@@ -27,12 +28,24 @@ class RecordingService : Service() {
     suspend fun startRecording(outputFile: File, onError: (Exception) -> Unit) {
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Whisper Recording")
-            .setContentText("Recording audio in background...")
+            .setContentText("Recording audio... Tap to return to app")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
 
-        startForeground(1, notification)
+        // Safe handling for foreground service type (microphone)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val serviceType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            } else {
+                0
+            }
+            startForeground(1, notification, serviceType)
+        } else {
+            startForeground(1, notification)
+        }
+
         recorder.startRecording(outputFile, onError)
     }
 
@@ -45,9 +58,12 @@ class RecordingService : Service() {
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val serviceChannel = NotificationChannel(
-                CHANNEL_ID, "Recording Service Channel",
+                CHANNEL_ID,
+                "Recording Service Channel",
                 NotificationManager.IMPORTANCE_LOW
-            )
+            ).apply {
+                description = "Used for background audio recording"
+            }
             val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(serviceChannel)
         }

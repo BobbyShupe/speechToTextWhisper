@@ -21,8 +21,10 @@ fun MainScreen(viewModel: MainScreenViewModel) {
     MainScreen(
         canTranscribe = viewModel.canTranscribe,
         isRecording = viewModel.isRecording,
+        isTranscribing = viewModel.isTranscribing,
         messageLog = viewModel.dataLog,
         onRecordTapped = viewModel::toggleRecord,
+        onTranscribeTapped = viewModel::transcribeCurrentChunk,
         onClearTapped = viewModel::clearLog
     )
 }
@@ -31,44 +33,68 @@ fun MainScreen(viewModel: MainScreenViewModel) {
 private fun MainScreen(
     canTranscribe: Boolean,
     isRecording: Boolean,
+    isTranscribing: Boolean,
     messageLog: String,
     onRecordTapped: () -> Unit,
+    onTranscribeTapped: () -> Unit,
     onClearTapped: () -> Unit
 ) {
-    val backgroundColor = Color(0xFF000000) // Dark background color
+    val backgroundColor = Color(0xFF000000)
     val clipboardManager = LocalClipboardManager.current
 
-    Scaffold(
-        containerColor = backgroundColor
-    ) { innerPadding ->
+    Scaffold(containerColor = backgroundColor) { innerPadding ->
         Column(
             modifier = Modifier
                 .padding(innerPadding)
                 .padding(16.dp)
                 .fillMaxSize()
         ) {
+            // Main action buttons row
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                // Record Button
                 Box(modifier = Modifier.weight(1f)) {
                     RecordButton(
-                        enabled = canTranscribe,
+                        enabled = canTranscribe && !isTranscribing,
                         isRecording = isRecording,
                         onClick = onRecordTapped
                     )
                 }
 
+                // Stop & Transcribe Chunk Button
+                Button(
+                    onClick = onTranscribeTapped,
+                    enabled = canTranscribe && isRecording && !isTranscribing,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(
+                        if (isTranscribing) "Transcribing chunk..."
+                        else "Stop & Transcribe Chunk"
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Secondary buttons (Copy + Clear)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 Button(
                     onClick = { clipboardManager.setText(AnnotatedString(messageLog)) },
-                    enabled = messageLog.isNotEmpty()
+                    enabled = messageLog.isNotEmpty(),
+                    modifier = Modifier.weight(1f)
                 ) {
                     Text("Copy")
                 }
 
                 Button(
                     onClick = onClearTapped,
-                    enabled = messageLog.isNotEmpty()
+                    enabled = messageLog.isNotEmpty(),
+                    modifier = Modifier.weight(1f)
                 ) {
                     Text("Clear")
                 }
@@ -100,7 +126,7 @@ private fun CumulativeTextDisplay(text: String) {
                 Text(
                     text = text,
                     style = MaterialTheme.typography.bodyLarge,
-                    color = Color.White // Set to white for dark background
+                    color = Color.White
                 )
             }
         }

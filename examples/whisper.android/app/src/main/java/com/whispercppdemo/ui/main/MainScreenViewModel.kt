@@ -19,11 +19,16 @@ import java.io.File
 
 class MainScreenViewModel(private val application: Application) : ViewModel() {
     var canTranscribe by mutableStateOf(false)
+        private set
     var dataLog by mutableStateOf("")
+        private set
     var isRecording by mutableStateOf(false)
+        private set
+    var isTranscribing by mutableStateOf(false)
+        private set
 
     private var recordingService: RecordingService? = null
-    private var recordedFile: File? = null
+    private var currentRecordedFile: File? = null
     private var whisperContext: com.whispercpp.whisper.WhisperContext? = null
 
     private val prefs: SharedPreferences by lazy {
@@ -50,9 +55,7 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
 
     private suspend fun loadData() {
         try {
-            // Load saved transcript first
             loadSavedTranscript()
-
             copyAssets()
             loadBaseModel()
             canTranscribe = true
@@ -82,49 +85,80 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
     private suspend fun loadBaseModel() = withContext(Dispatchers.IO) {
         application.assets.list("models/")?.firstOrNull()?.let {
             whisperContext = com.whispercpp.whisper.WhisperContext.createContextFromAsset(
-                application.assets,
-                "models/$it"
+                application.assets, "models/$it"
             )
         }
     }
 
-    fun toggleRecord() = viewModelScope.launch {
-        if (isRecording) {
-            recordingService?.stopRecording()
-            isRecording = false
-            recordedFile?.let { transcribeAudio(it) }
-        } else {
-            val file = withContext(Dispatchers.IO) { File.createTempFile("rec", ".wav") }
-            recordedFile = file
-            recordingService?.startRecording(file) { isRecording = false }
-            isRecording = true
-        }
-    }
+    // Clean version: Stop → Transcribe in background → Immediately start new recording
+    fun transcribeCurrentChunk() = viewModelScope.launch {
+        if (!canTranscribe || isTranscribing || currentRecordedFile == null) return@launch
 
-    private suspend fun transcribeAudio(file: File) {
+        val fileToTranscribe = currentRecordedFile!!
+
+        // 1. Stop current recording
+        recordingService?.stopRecording()
+        isRecording = false
+
+        // 2. Immediately start new recording (recording continues)
+        startNewRecording()
+
+        // 3. Transcribe previous chunk silently in background
+        isTranscribing = true
         canTranscribe = false
+
         try {
-            val data = withContext(Dispatchers.IO) { decodeWaveFile(file) }
+            val data = withContext(Dispatchers.IO) { decodeWaveFile(fileToTranscribe) }
+
             val rawText = whisperContext?.transcribeData(data) ?: ""
             val regex = Regex("\\[\\d{2}:\\d{2}:\\d{2}\\.\\d{3}\\s-->\\s\\d{2}:\\d{2}:\\d{2}\\.\\d{3}\\]:")
             val cleanText = rawText.replace(regex, "").trim()
 
             if (cleanText.isNotEmpty()) {
                 withContext(Dispatchers.Main) {
-                    dataLog = if (dataLog.isEmpty()) cleanText else "$dataLog $cleanText"
-                    saveTranscript()  // ← Save after every new transcription
+                    dataLog = if (dataLog.isEmpty()) cleanText else "$dataLog\n\n$cleanText"
+                    saveTranscript()
                 }
             }
         } catch (e: Exception) {
             Log.e("Whisper", "Transcription error", e)
+            withContext(Dispatchers.Main) {
+                dataLog += "[Transcription error]\n"
+            }
         } finally {
+            isTranscribing = false
             canTranscribe = true
+        }
+    }
+
+    private suspend fun startNewRecording() {
+        val newFile = withContext(Dispatchers.IO) {
+            File.createTempFile("rec", ".wav", application.cacheDir)
+        }
+        currentRecordedFile = newFile
+
+        recordingService?.startRecording(newFile) { e ->
+            viewModelScope.launch(Dispatchers.Main) {
+                dataLog += "[Recording error]\n"
+                isRecording = false
+            }
+        }
+        isRecording = true
+    }
+
+    fun toggleRecord() = viewModelScope.launch {
+        if (isRecording) {
+            recordingService?.stopRecording()
+            isRecording = false
+            currentRecordedFile = null
+        } else {
+            startNewRecording()
         }
     }
 
     fun clearLog() {
         dataLog = ""
-        saveTranscript()  // Clear saved data too
+        saveTranscript()
     }
 
     override fun onCleared() {
