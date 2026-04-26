@@ -21,7 +21,7 @@ fun MainScreen(viewModel: MainScreenViewModel) {
     MainScreen(
         canTranscribe = viewModel.canTranscribe,
         isRecording = viewModel.isRecording,
-        isTranscribing = viewModel.isTranscribing,
+        queueSize = viewModel.queueSize,
         messageLog = viewModel.dataLog,
         onRecordTapped = viewModel::toggleRecord,
         onTranscribeTapped = viewModel::transcribeCurrentChunk,
@@ -33,7 +33,7 @@ fun MainScreen(viewModel: MainScreenViewModel) {
 private fun MainScreen(
     canTranscribe: Boolean,
     isRecording: Boolean,
-    isTranscribing: Boolean,
+    queueSize: Int,
     messageLog: String,
     onRecordTapped: () -> Unit,
     onTranscribeTapped: () -> Unit,
@@ -49,36 +49,32 @@ private fun MainScreen(
                 .padding(16.dp)
                 .fillMaxSize()
         ) {
-            // Main action buttons row
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                // Record Button
                 Box(modifier = Modifier.weight(1f)) {
                     RecordButton(
-                        enabled = canTranscribe && !isTranscribing,
+                        enabled = canTranscribe, // Keep enabled even during background transcription
                         isRecording = isRecording,
                         onClick = onRecordTapped
                     )
                 }
 
-                // Stop & Transcribe Chunk Button
                 Button(
                     onClick = onTranscribeTapped,
-                    enabled = canTranscribe && isRecording && !isTranscribing,
+                    enabled = canTranscribe && isRecording, // Only enabled while actively recording
                     modifier = Modifier.weight(1f)
                 ) {
                     Text(
-                        if (isTranscribing) "Transcribing chunk..."
-                        else "Stop & Transcribe Chunk"
+                        if (queueSize > 0) "Queue: $queueSize..."
+                        else "Transcribe Chunk"
                     )
                 }
             }
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Secondary buttons (Copy + Clear)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
