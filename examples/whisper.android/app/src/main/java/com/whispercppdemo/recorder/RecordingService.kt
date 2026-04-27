@@ -10,6 +10,7 @@ import androidx.core.app.NotificationCompat
 import java.io.File
 
 class RecordingService : Service() {
+
     private val binder = RecordingBinder()
     private val recorder = Recorder()
     private val CHANNEL_ID = "recording_channel"
@@ -25,6 +26,13 @@ class RecordingService : Service() {
         createNotificationChannel()
     }
 
+    // Fixed: Proper override + correct syntax
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
     suspend fun startRecording(outputFile: File, onError: (Exception) -> Unit) {
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Whisper Recording")
@@ -34,7 +42,6 @@ class RecordingService : Service() {
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
 
-        // Safe handling for foreground service type (microphone)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val serviceType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
@@ -49,10 +56,13 @@ class RecordingService : Service() {
         recorder.startRecording(outputFile, onError)
     }
 
-    suspend fun stopRecording() {
+    suspend fun stopRecording(shouldStopService: Boolean = true) {
         recorder.stopRecording()
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
+
+        if (shouldStopService) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+        }
     }
 
     private fun createNotificationChannel() {

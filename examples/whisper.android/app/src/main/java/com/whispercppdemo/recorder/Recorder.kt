@@ -25,8 +25,7 @@ class Recorder {
 
     suspend fun stopRecording() = withContext(scope.coroutineContext) {
         recorder?.stopRecording()
-        @Suppress("BlockingMethodInNonBlockingContext")
-        recorder?.join()
+        recorder?.join()  // Safe because we check nullability with ?.
         recorder = null
     }
 }
@@ -34,8 +33,8 @@ class Recorder {
 private class AudioRecordThread(
     private val outputFile: File,
     private val onError: (Exception) -> Unit
-) :
-    Thread("AudioRecorder") {
+) : Thread("AudioRecorder") {
+
     private var quit = AtomicBoolean(false)
 
     @SuppressLint("MissingPermission")
@@ -46,6 +45,7 @@ private class AudioRecordThread(
                 AudioFormat.CHANNEL_IN_MONO,
                 AudioFormat.ENCODING_PCM_16BIT
             ) * 4
+
             val buffer = ShortArray(bufferSize / 2)
 
             val audioRecord = AudioRecord(
@@ -67,8 +67,8 @@ private class AudioRecordThread(
                         for (i in 0 until read) {
                             allData.add(buffer[i])
                         }
-                    } else {
-                        throw java.lang.RuntimeException("audioRecord.read returned $read")
+                    } else if (read == AudioRecord.ERROR_INVALID_OPERATION || read == AudioRecord.ERROR_BAD_VALUE) {
+                        throw RuntimeException("audioRecord.read returned error: $read")
                     }
                 }
 

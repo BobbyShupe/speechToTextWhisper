@@ -108,14 +108,14 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
 
         val fileToQueue = currentRecordedFile!!
 
-        // 1. Stop current chunk
-        recordingService?.stopRecording()
+        // Stop recording but DO NOT stop the service yet
+        recordingService?.stopRecording(shouldStopService = false)
 
-        // 2. Queue it
+        // Queue the finished chunk
         queueSize++
         transcriptionQueue.send(fileToQueue)
 
-        // 3. Immediately start next chunk so "Stop" button stays enabled
+        // Immediately start the next recording chunk
         startNewRecording()
     }
 
@@ -137,7 +137,9 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
     fun toggleRecord() = viewModelScope.launch {
         if (isRecording) {
             val fileToQueue = currentRecordedFile
-            recordingService?.stopRecording()
+            // Really stop the service now
+            recordingService?.stopRecording(shouldStopService = true)
+
             isRecording = false
             currentRecordedFile = null
 
