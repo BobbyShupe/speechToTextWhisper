@@ -6,6 +6,7 @@ import android.content.pm.ServiceInfo
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import java.io.File
 
@@ -14,6 +15,8 @@ class RecordingService : Service() {
     private val binder = RecordingBinder()
     private val recorder = Recorder()
     private val CHANNEL_ID = "recording_channel"
+
+    private var wakeLock: PowerManager.WakeLock? = null
 
     inner class RecordingBinder : Binder() {
         fun getService(): RecordingService = this@RecordingService
@@ -26,11 +29,16 @@ class RecordingService : Service() {
         createNotificationChannel()
     }
 
-    // Fixed: Proper override + correct syntax
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
+        releaseWakeLock()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
+    }
+
+    override fun onDestroy() {
+        releaseWakeLock()
+        super.onDestroy()
     }
 
     suspend fun startRecording(outputFile: File, onError: (Exception) -> Unit) {
@@ -42,6 +50,7 @@ class RecordingService : Service() {
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
 
+        // Start as foreground service with microphone type
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val serviceType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
@@ -53,15 +62,36 @@ class RecordingService : Service() {
             startForeground(1, notification)
         }
 
+        // Acquire partial wake lock to survive unplugging charger / Doze mode
+        val powerManager = getSystemService(POWER_SERVICE) as PowerManager
+        wakeLock = powerManager.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "WhisperCppDemo::RecordingWakeLock"
+        ).apply {
+            setReferenceCounted(false)
+            acquire(2 * 60 * 60 * 1000L) // Hold for up to 2 hours (adjust as needed)
+        }
+
         recorder.startRecording(outputFile, onError)
     }
 
     suspend fun stopRecording(shouldStopService: Boolean = true) {
         recorder.stopRecording()
 
+        releaseWakeLock()
+
         if (shouldStopService) {
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
+        }
+    }
+
+    private fun releaseWakeLock() {
+        wakeLock?.let {
+            if (it.isHeld) {
+                it.release()
+            }
+            wakeLock = null
         }
     }
 
