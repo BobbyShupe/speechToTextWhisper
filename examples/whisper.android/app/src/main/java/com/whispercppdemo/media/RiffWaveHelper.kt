@@ -6,75 +6,60 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 fun decodeWaveFile(file: File): FloatArray {
-    val baos = ByteArrayOutputStream()
-    file.inputStream().use { it.copyTo(baos) }
-    val buffer = ByteBuffer.wrap(baos.toByteArray())
-    buffer.order(ByteOrder.LITTLE_ENDIAN)
-    val channel = buffer.getShort(22).toInt()
-    buffer.position(44)
-    val shortBuffer = buffer.asShortBuffer()
-    val shortArray = ShortArray(shortBuffer.limit())
-    shortBuffer.get(shortArray)
-    return FloatArray(shortArray.size / channel) { index ->
-        when (channel) {
-            1 -> (shortArray[index] / 32767.0f).coerceIn(-1f..1f)
-            else -> ((shortArray[2*index] + shortArray[2*index + 1])/ 32767.0f / 2.0f).coerceIn(-1f..1f)
+    if (!file.exists() || file.length() < 1024) {
+        throw IllegalArgumentException("WAV file too small: ${file.length()} bytes")
+    }
+
+    val data = file.readBytes()
+    val buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+
+    // Read channels from standard position (byte 22)
+    val channels = buffer.getShort(22).toInt()
+
+    if (channels != 1 && channels != 2) {
+        throw IllegalArgumentException("Invalid number of channels: $channels")
+    }
+
+    // Most WAV files have the data starting at byte 44.
+    // If not, we do a simple search for "data" chunk
+    var dataOffset = 44
+    if (data.size > 44) {
+        val headerEnd = minOf(100, data.size - 8)
+        for (i in 0 until headerEnd step 4) {
+            if (i + 4 <= data.size &&
+                data[i].toInt().toChar() == 'd' &&
+                data[i+1].toInt().toChar() == 'a' &&
+                data[i+2].toInt().toChar() == 't' &&
+                data[i+3].toInt().toChar() == 'a') {
+                dataOffset = i + 8
+                break
+            }
         }
     }
-}
 
-fun encodeWaveFile(file: File, data: ShortArray) {
-    file.outputStream().use {
-        it.write(headerBytes(data.size * 2))
-        val buffer = ByteBuffer.allocate(data.size * 2)
-        buffer.order(ByteOrder.LITTLE_ENDIAN)
-        buffer.asShortBuffer().put(data)
-        val bytes = ByteArray(buffer.limit())
-        buffer.get(bytes)
-        it.write(bytes)
+    if (dataOffset + 100 > data.size) {
+        throw IllegalArgumentException("Could not find audio data in WAV file")
     }
-}
 
-private fun headerBytes(totalLength: Int): ByteArray {
-    require(totalLength >= 44)
-    ByteBuffer.allocate(44).apply {
-        order(ByteOrder.LITTLE_ENDIAN)
+    buffer.position(dataOffset)
 
-        put('R'.code.toByte())
-        put('I'.code.toByte())
-        put('F'.code.toByte())
-        put('F'.code.toByte())
+    val shortBuffer = buffer.asShortBuffer()
+    val shorts = ShortArray(shortBuffer.remaining())
+    shortBuffer.get(shorts)
 
-        putInt(totalLength - 8)
+    if (shorts.isEmpty()) {
+        throw IllegalArgumentException("No audio samples found")
+    }
 
-        put('W'.code.toByte())
-        put('A'.code.toByte())
-        put('V'.code.toByte())
-        put('E'.code.toByte())
+    val sampleCount = shorts.size / channels
 
-        put('f'.code.toByte())
-        put('m'.code.toByte())
-        put('t'.code.toByte())
-        put(' '.code.toByte())
-
-        putInt(16)
-        putShort(1.toShort())
-        putShort(1.toShort())
-        putInt(16000)
-        putInt(32000)
-        putShort(2.toShort())
-        putShort(16.toShort())
-
-        put('d'.code.toByte())
-        put('a'.code.toByte())
-        put('t'.code.toByte())
-        put('a'.code.toByte())
-
-        putInt(totalLength - 44)
-        position(0)
-    }.also {
-        val bytes = ByteArray(it.limit())
-        it.get(bytes)
-        return bytes
+    return FloatArray(sampleCount) { i ->
+        when (channels) {
+            1 -> (shorts[i] / 32767.0f).coerceIn(-1f, 1f)
+            else -> {
+                val sample = (shorts[i*2] + shorts[i*2 + 1]) / 2
+                (sample / 32767.0f).coerceIn(-1f, 1f)
+            }
+        }
     }
 }

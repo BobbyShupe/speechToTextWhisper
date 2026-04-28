@@ -24,6 +24,11 @@ class RecordingService : Service() {
 
     override fun onBind(intent: Intent?): IBinder = binder
 
+    // Improved: Use START_REDELIVER_INTENT so the system tries harder to restart us
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        return START_REDELIVER_INTENT
+    }
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
@@ -44,32 +49,29 @@ class RecordingService : Service() {
     suspend fun startRecording(outputFile: File, onError: (Exception) -> Unit) {
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Whisper Recording")
-            .setContentText("Recording audio... Tap to return to app")
+            .setContentText("Recording in progress... (Do not swipe away)")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
 
-        // Start as foreground service with microphone type
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val serviceType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-            } else {
-                0
-            }
+            } else 0
             startForeground(1, notification, serviceType)
         } else {
             startForeground(1, notification)
         }
 
-        // Acquire partial wake lock to survive unplugging charger / Doze mode
+        // Stronger wake lock
         val powerManager = getSystemService(POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(
             PowerManager.PARTIAL_WAKE_LOCK,
             "WhisperCppDemo::RecordingWakeLock"
         ).apply {
             setReferenceCounted(false)
-            acquire(2 * 60 * 60 * 1000L) // Hold for up to 2 hours (adjust as needed)
+            acquire(6 * 60 * 60 * 1000L) // 6 hours
         }
 
         recorder.startRecording(outputFile, onError)
@@ -77,7 +79,6 @@ class RecordingService : Service() {
 
     suspend fun stopRecording(shouldStopService: Boolean = true) {
         recorder.stopRecording()
-
         releaseWakeLock()
 
         if (shouldStopService) {
@@ -88,9 +89,7 @@ class RecordingService : Service() {
 
     private fun releaseWakeLock() {
         wakeLock?.let {
-            if (it.isHeld) {
-                it.release()
-            }
+            if (it.isHeld) it.release()
             wakeLock = null
         }
     }
@@ -102,10 +101,10 @@ class RecordingService : Service() {
                 "Recording Service Channel",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Used for background audio recording"
+                description = "Used for continuous audio recording"
+                setShowBadge(false)
             }
-            val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(serviceChannel)
+            getSystemService(NotificationManager::class.java).createNotificationChannel(serviceChannel)
         }
     }
 }
