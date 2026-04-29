@@ -83,30 +83,38 @@ class RecordingService : Service() {
     fun queueForTranscription(file: File, onResult: (String) -> Unit) {
         transcriptionScope.launch {
             try {
+                Log.d("Transcription", "Starting transcription for ${file.name}")
+
                 val data = decodeWaveFile(file)
-                val rawText = RecordingService.whisperContext?.transcribeData(data) ?: ""
+                Log.d("Transcription", "Audio decoded successfully, ${data.size} samples")
 
-                val cleanText = rawText.replace(
-                    Regex("\\[\\d{2}:\\d{2}:\\d{2}\\.\\d{3}\\s-->\\s\\d{2}:\\d{2}:\\d{2}\\.\\d{3}\\]:"),
-                    ""
-                ).trim()
+                // Use printTimestamp = false to get clean text
+                val rawText = RecordingService.whisperContext?.transcribeData(data, printTimestamp = false) ?: ""
 
-                val resultText = if (cleanText.isNotEmpty()) cleanText else "[No speech detected]"
+                Log.d("Transcription", "Raw whisper output length: ${rawText.length}")
+                Log.d("Transcription", "Raw output preview: ${rawText.take(200)}")
+
+                val cleanText = rawText.trim()
+
+                val resultText = if (cleanText.isNotEmpty() && cleanText.length > 3) {
+                    cleanText
+                } else {
+                    "[No speech detected - try speaking louder and closer to the microphone]"
+                }
 
                 withContext(Dispatchers.Main) {
                     onResult(resultText)
                 }
 
             } catch (e: Exception) {
-                Log.e("Transcription", "Failed to transcribe ${file.name}", e)
+                Log.e("Transcription", "Transcription failed", e)
                 withContext(Dispatchers.Main) {
                     onResult("[Transcription Error: ${e.message}]")
                 }
             } finally {
-                // IMPORTANT: Always delete the WAV file after processing
                 if (file.exists()) {
-                    val deleted = file.delete()
-                    Log.d("Transcription", "Deleted WAV file ${file.name}: $deleted")
+                    file.delete()
+                    Log.d("Transcription", "Deleted ${file.name}")
                 }
             }
         }
