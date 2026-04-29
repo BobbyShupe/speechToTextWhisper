@@ -19,17 +19,17 @@ class Recorder {
     private val scope: CoroutineScope = CoroutineScope(
         Executors.newSingleThreadExecutor().asCoroutineDispatcher()
     )
-    private var recorder: AudioRecordThread? = null
+    private var recorderThread: AudioRecordThread? = null
 
     suspend fun startRecording(outputFile: File, onError: (Exception) -> Unit) = withContext(scope.coroutineContext) {
-        recorder = AudioRecordThread(outputFile, onError)
-        recorder?.start()
+        recorderThread = AudioRecordThread(outputFile, onError)
+        recorderThread?.start()
     }
 
     suspend fun stopRecording() = withContext(scope.coroutineContext) {
-        recorder?.stopRecording()
-        recorder?.join(4000)   // Wait longer for finalization
-        recorder = null
+        recorderThread?.stopRecording()
+        recorderThread?.join(4000) // Wait up to 4 seconds for clean shutdown
+        recorderThread = null
     }
 }
 
@@ -38,7 +38,7 @@ private class AudioRecordThread(
     private val onError: (Exception) -> Unit
 ) : Thread("AudioRecorder") {
 
-    private var quit = AtomicBoolean(false)
+    private val quit = AtomicBoolean(false)
 
     @SuppressLint("MissingPermission")
     override fun run() {
@@ -47,24 +47,27 @@ private class AudioRecordThread(
 
         try {
             val bufferSize = AudioRecord.getMinBufferSize(
-                16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
+                16000,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT
             ) * 4
 
             val buffer = ShortArray(bufferSize / 2)
 
             audioRecord = AudioRecord(
-                MediaRecorder.AudioSource.MIC, 16000,
-                AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufferSize
+                MediaRecorder.AudioSource.MIC,
+                16000,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                bufferSize
             )
 
             if (audioRecord.state != AudioRecord.STATE_INITIALIZED) {
-                throw RuntimeException("AudioRecord initialization failed")
+                throw RuntimeException("Failed to initialize AudioRecord")
             }
 
             fos = FileOutputStream(outputFile)
-
-            // Write correct header with placeholder size first
-            fos.write(createWavHeader(0))
+            fos.write(createWavHeader(0)) // Write initial header
 
             audioRecord.startRecording()
 
@@ -82,15 +85,15 @@ private class AudioRecordThread(
 
             audioRecord.stop()
             fos.flush()
-
-            // Update header with real size
             fos.close()
+
+            // Update header with correct size
             updateWavHeader(outputFile, totalSamples)
 
             Log.d("AudioRecorder", "Finished recording: $totalSamples samples (${outputFile.length()} bytes)")
 
         } catch (e: Exception) {
-            Log.e("AudioRecorder", "Recording error", e)
+            Log.e("AudioRecorder", "Recording failed", e)
             onError(e)
         } finally {
             audioRecord?.release()
@@ -118,12 +121,12 @@ private fun createWavHeader(dataSize: Int): ByteArray {
     bb.put("WAVE".toByteArray())
     bb.put("fmt ".toByteArray())
     bb.putInt(16)
-    bb.putShort(1)        // Audio format = PCM
-    bb.putShort(1)        // Channels = 1 (mono)
-    bb.putInt(16000)      // Sample rate
-    bb.putInt(32000)      // Byte rate
-    bb.putShort(2)        // Block align
-    bb.putShort(16)       // Bits per sample
+    bb.putShort(1)           // PCM
+    bb.putShort(1)           // Mono
+    bb.putInt(16000)
+    bb.putInt(32000)
+    bb.putShort(2)
+    bb.putShort(16)
     bb.put("data".toByteArray())
     bb.putInt(dataSize)
 

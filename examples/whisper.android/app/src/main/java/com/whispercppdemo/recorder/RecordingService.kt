@@ -7,7 +7,10 @@ import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.util.Log
 import androidx.core.app.NotificationCompat
+import com.whispercppdemo.media.decodeWaveFile
+import kotlinx.coroutines.*
 import java.io.File
 
 class RecordingService : Service() {
@@ -17,6 +20,7 @@ class RecordingService : Service() {
     private val CHANNEL_ID = "recording_channel"
 
     private var wakeLock: PowerManager.WakeLock? = null
+    private val transcriptionScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     inner class RecordingBinder : Binder() {
         fun getService(): RecordingService = this@RecordingService
@@ -24,9 +28,8 @@ class RecordingService : Service() {
 
     override fun onBind(intent: Intent?): IBinder = binder
 
-    // Improved: Use START_REDELIVER_INTENT so the system tries harder to restart us
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        return START_REDELIVER_INTENT
+        return START_STICKY
     }
 
     override fun onCreate() {
@@ -36,20 +39,18 @@ class RecordingService : Service() {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
-        releaseWakeLock()
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
     }
 
     override fun onDestroy() {
         releaseWakeLock()
+        transcriptionScope.cancel()
         super.onDestroy()
     }
 
     suspend fun startRecording(outputFile: File, onError: (Exception) -> Unit) {
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Whisper Recording")
-            .setContentText("Recording in progress... (Do not swipe away)")
+            .setContentText("Recording... Transcription in background")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -64,16 +65,7 @@ class RecordingService : Service() {
             startForeground(1, notification)
         }
 
-        // Stronger wake lock
-        val powerManager = getSystemService(POWER_SERVICE) as PowerManager
-        wakeLock = powerManager.newWakeLock(
-            PowerManager.PARTIAL_WAKE_LOCK,
-            "WhisperCppDemo::RecordingWakeLock"
-        ).apply {
-            setReferenceCounted(false)
-            acquire(6 * 60 * 60 * 1000L) // 6 hours
-        }
-
+        acquireWakeLock()
         recorder.startRecording(outputFile, onError)
     }
 
@@ -87,6 +79,50 @@ class RecordingService : Service() {
         }
     }
 
+    // Transcribe and automatically delete the WAV file afterwards
+    fun queueForTranscription(file: File, onResult: (String) -> Unit) {
+        transcriptionScope.launch {
+            try {
+                val data = decodeWaveFile(file)
+                val rawText = RecordingService.whisperContext?.transcribeData(data) ?: ""
+
+                val cleanText = rawText.replace(
+                    Regex("\\[\\d{2}:\\d{2}:\\d{2}\\.\\d{3}\\s-->\\s\\d{2}:\\d{2}:\\d{2}\\.\\d{3}\\]:"),
+                    ""
+                ).trim()
+
+                val resultText = if (cleanText.isNotEmpty()) cleanText else "[No speech detected]"
+
+                withContext(Dispatchers.Main) {
+                    onResult(resultText)
+                }
+
+            } catch (e: Exception) {
+                Log.e("Transcription", "Failed to transcribe ${file.name}", e)
+                withContext(Dispatchers.Main) {
+                    onResult("[Transcription Error: ${e.message}]")
+                }
+            } finally {
+                // IMPORTANT: Always delete the WAV file after processing
+                if (file.exists()) {
+                    val deleted = file.delete()
+                    Log.d("Transcription", "Deleted WAV file ${file.name}: $deleted")
+                }
+            }
+        }
+    }
+
+    private fun acquireWakeLock() {
+        val powerManager = getSystemService(POWER_SERVICE) as PowerManager
+        wakeLock = powerManager.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "WhisperCppDemo::RecordingWakeLock"
+        ).apply {
+            setReferenceCounted(false)
+            acquire(6 * 60 * 60 * 1000L)
+        }
+    }
+
     private fun releaseWakeLock() {
         wakeLock?.let {
             if (it.isHeld) it.release()
@@ -96,15 +132,18 @@ class RecordingService : Service() {
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val serviceChannel = NotificationChannel(
+            val channel = NotificationChannel(
                 CHANNEL_ID,
-                "Recording Service Channel",
+                "Recording & Transcription",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Used for continuous audio recording"
-                setShowBadge(false)
+                description = "Handles recording and background transcription"
             }
-            getSystemService(NotificationManager::class.java).createNotificationChannel(serviceChannel)
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
+    }
+
+    companion object {
+        var whisperContext: com.whispercpp.whisper.WhisperContext? = null
     }
 }
