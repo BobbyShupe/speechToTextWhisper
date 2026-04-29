@@ -61,7 +61,7 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
             loadBaseModel()
             canTranscribe = true
 
-            // NEW: Resume any leftover WAV files
+            // Resume any leftover recordings safely
             resumePendingTranscriptions()
         }
     }
@@ -75,7 +75,7 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
         val modelsPath = File(application.filesDir, "models").apply { mkdirs() }
         val assetModels = application.assets.list("models") ?: emptyArray()
 
-        Log.d("WhisperVM", "Models in assets: ${assetModels.joinToString()}")
+        Log.d("WhisperVM", "Models found in assets: ${assetModels.joinToString()}")
 
         assetModels.forEach { name ->
             val dest = File(modelsPath, name)
@@ -107,35 +107,39 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
                 withContext(Dispatchers.Main) {
                     selectedModel = modelToLoad
                 }
-                Log.d("WhisperVM", "Loaded model: $modelToLoad")
+                Log.d("WhisperVM", "Loaded initial model: $modelToLoad")
             } catch (e: Exception) {
-                Log.e("WhisperVM", "Failed to load model $modelToLoad", e)
+                Log.e("WhisperVM", "Failed to load initial model", e)
             }
         }
     }
 
-    // NEW: Resume any unfinished WAV files on app start
+    // Safe resume: Process one file at a time to avoid OOM
     private fun resumePendingTranscriptions() {
         viewModelScope.launch(Dispatchers.IO) {
             val cacheDir = application.cacheDir
-            val pendingWavFiles = cacheDir.listFiles { file ->
-                file.name.endsWith(".wav") && file.length() > 1000
-            } ?: emptyArray()
+            val pendingFiles = cacheDir.listFiles { file ->
+                file.name.endsWith(".wav", ignoreCase = true) && file.length() > 2000
+            } ?: emptyArray<File>()
 
-            if (pendingWavFiles.isNotEmpty()) {
-                Log.d("WhisperVM", "Found ${pendingWavFiles.size} pending WAV files to resume")
-                withContext(Dispatchers.Main) {
-                    //dataLog += "\n[Resuming ${pendingWavFiles.size} pending recordings...]\n"
-                }
+            if (pendingFiles.isEmpty()) return@launch
 
-                pendingWavFiles.forEach { file ->
-                    queueSize++
-                    recordingService?.queueForTranscription(file) { result ->
+            Log.d("WhisperVM", "Found ${pendingFiles.size} pending WAV files. Resuming one by one...")
+
+            withContext(Dispatchers.Main) {
+                dataLog += "\n[Resuming ${pendingFiles.size} pending recordings (one at a time)...]\n"
+            }
+
+            for (file in pendingFiles) {
+                queueSize++
+                recordingService?.queueForTranscription(file) { result ->
+                    viewModelScope.launch(Dispatchers.Main) {
                         dataLog = if (dataLog.isEmpty()) result else "$dataLog\n\n$result"
                         saveTranscript()
                         queueSize = (queueSize - 1).coerceAtLeast(0)
                     }
                 }
+                delay(800) // Give each transcription time to complete
             }
         }
     }
@@ -143,8 +147,12 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
     fun selectModel(modelName: String) = viewModelScope.launch {
         if (modelName == selectedModel || modelName.isEmpty()) return@launch
 
+        Log.d("WhisperVM", "selectModel called with: $modelName")
+
         try {
+            // Release old context safely
             RecordingService.whisperContext?.release()
+            RecordingService.whisperContext = null
 
             val modelFile = File(application.filesDir, "models/$modelName")
             if (!modelFile.exists()) {
@@ -163,8 +171,6 @@ class MainScreenViewModel(private val application: Application) : ViewModel() {
             Log.e("WhisperVM", "Failed to switch to model $modelName", e)
         }
     }
-
-    // ==================== Recording Functions ====================
 
     fun transcribeCurrentChunk() = viewModelScope.launch {
         if (!canTranscribe || currentRecordedFile == null) return@launch
