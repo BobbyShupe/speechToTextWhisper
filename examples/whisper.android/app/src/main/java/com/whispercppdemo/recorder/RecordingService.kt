@@ -1,6 +1,7 @@
 package com.whispercppdemo.recorder
 
 import android.app.*
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Binder
@@ -50,7 +51,7 @@ class RecordingService : Service() {
     suspend fun startRecording(outputFile: File, onError: (Exception) -> Unit) {
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Whisper Recording")
-            .setContentText("Recording... Transcription in background")
+            .setContentText("Recording audio...")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -79,25 +80,16 @@ class RecordingService : Service() {
         }
     }
 
-    fun queueForTranscription(file: File, onResult: (String) -> Unit) {
+    fun queueForTranscription(file: File) {
         transcriptionScope.launch {
             try {
-                System.gc() // Reduce memory pressure
+                System.gc()
 
                 Log.d("Transcription", "Starting transcription for ${file.name} (${file.length()} bytes)")
 
                 val data = decodeWaveFile(file)
-                Log.d("Transcription", "Decoded ${data.size} samples")
 
-                val context = RecordingService.whisperContext
-                if (context == null) {
-                    withContext(Dispatchers.Main) {
-                        onResult("[Error: No model loaded]")
-                    }
-                    return@launch
-                }
-
-                val rawText = context.transcribeData(data, printTimestamp = false) ?: ""
+                val rawText = RecordingService.whisperContext?.transcribeData(data, printTimestamp = false) ?: ""
 
                 val cleanText = rawText.replace(
                     Regex("\\[\\d{2}:\\d{2}:\\d{2}\\.\\d{3}\\s-->\\s\\d{2}:\\d{2}:\\d{2}\\.\\d{3}\\]:?"),
@@ -106,15 +98,11 @@ class RecordingService : Service() {
 
                 val resultText = if (cleanText.isNotEmpty()) cleanText else "[No speech detected]"
 
-                withContext(Dispatchers.Main) {
-                    onResult(resultText)
-                }
+                saveTranscriptionResult(resultText)
 
             } catch (e: Exception) {
                 Log.e("Transcription", "Failed to transcribe ${file.name}", e)
-                withContext(Dispatchers.Main) {
-                    onResult("[Transcription Error: ${e.message}]")
-                }
+                saveTranscriptionResult("[Transcription Error: ${e.message}]")
             } finally {
                 if (file.exists()) {
                     file.delete()
@@ -124,6 +112,13 @@ class RecordingService : Service() {
         }
     }
 
+    private fun saveTranscriptionResult(text: String) {
+        val prefs = getSharedPreferences("whisper_prefs", Context.MODE_PRIVATE)
+        val current = prefs.getString("data_log", "") ?: ""
+        val updated = if (current.isEmpty()) text else "$current\n\n$text"
+        prefs.edit().putString("data_log", updated).apply()
+    }
+
     private fun acquireWakeLock() {
         val powerManager = getSystemService(POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(
@@ -131,7 +126,7 @@ class RecordingService : Service() {
             "WhisperCppDemo::RecordingWakeLock"
         ).apply {
             setReferenceCounted(false)
-            acquire(6 * 60 * 60 * 1000L)
+            acquire(8 * 60 * 60 * 1000L)
         }
     }
 
